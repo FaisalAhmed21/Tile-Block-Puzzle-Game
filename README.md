@@ -45,6 +45,40 @@ pip install pygame
 1. Download the Tile-Block-Puzzle-Game.py raw file to your local machine
 2. Open the Tile-Block-Puzzle-Game.py file in vs code and run the code 
 
+Hosting on the web (one-click playable link)
+-----------------------------------------
+
+This project is a Pygame application. To provide a clickable web link that opens the game in a browser, we can package it to WebAssembly/HTML using "pygbag" and deploy the build to GitHub Pages. I've added a GitHub Actions workflow that will automatically build and publish the web version when you push this repository to GitHub.
+
+Quick steps to publish:
+
+1. Create a repository on GitHub and push this project (all files) to the `main` (or `master`) branch.
+2. The GitHub Action (`.github/workflows/deploy-gh-pages.yml`) will run automatically. It:
+  - installs dependencies from `requirements.txt`
+  - installs `pygbag`
+  - runs `pygbag --release --target web -o build .`
+  - deploys the generated `build/web` folder to the `gh-pages` branch
+3. After the workflow completes, your site will be available at: `https://<your-github-username>.github.io/<your-repo-name>/` (GitHub Pages URL). Use that link to open the game on any device.
+
+If you prefer to build and test locally before pushing:
+
+PowerShell (local build):
+```powershell
+# create and activate a virtual environment (recommended)
+python -m venv .venv; .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+pip install pygbag
+# build web + test locally (output in ./build/web)
+python -m pygbag --release --target web -o build .
+```
+
+You can open `build/web/index.html` in a browser (or serve the folder with a simple HTTP server) to test the page locally before pushing.
+
+Notes and caveats
+- pygbag wraps pygame for the browser using WebAssembly and supports many (but not all) pygame APIs; the game may need small runtime adjustments. If the Action build fails, open the Action log to see missing modules or runtime exceptions and I can help patch minimal incompatibilities.
+- If you want me to create the GitHub repository, set up topics, or help edit code to increase browser compatibility, tell me and I can prepare patches.
+
 ## Controls
 
 - **Left Arrow**: Move block left
