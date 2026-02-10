@@ -1,6 +1,7 @@
 import pygame
 import random
 import time
+import asyncio
 
 # Initialize Pygame
 pygame.init()
@@ -292,7 +293,7 @@ def generate_new_block():
 def reset_game():
     """Reset all game variables to initial state"""
     global grid, lives, score, current_block, current_color, current_pos, game_over
-    global timer_start, timer_running, obstacle_x, obstacle_y, obstacle_color, collision_count
+    global timer_start, timer_running, obstacle_x, obstacle_y, obstacle_color, collision_count, game_exited
     
     grid = [[None for _ in range(GRID_WIDTH)] for _ in range(GRID_HEIGHT)]
     lives = 3
@@ -305,6 +306,7 @@ def reset_game():
     timer_running = True
     obstacle_x, obstacle_y, obstacle_color = generate_obstacle()
     collision_count = 0
+    game_exited = False
 
 # Initialize control buttons
 close_button = ControlButton(400 - BUTTON_WIDTH - BUTTON_MARGIN, BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT, RED, (200, 0, 0), draw_cross)
@@ -328,6 +330,215 @@ timer_running = True
 
 obstacle_x, obstacle_y, obstacle_color = generate_obstacle()
 collision_count = 0
+running = True
+elapsed_time = 0
+game_exited = False
+
+# Touch control variables
+touch_start_pos = None
+touch_start_time = 0
+MIN_SWIPE_DISTANCE = 30  # Minimum distance for swipe detection
+TAP_MAX_DURATION = 300  # Maximum time for tap (milliseconds)
+
+async def main():
+    """Main async game loop"""
+    global running, screen, clock, game_over, current_block, current_color, current_pos
+    global last_fall_time, timer_running, elapsed_time, lives, score, obstacle_x, obstacle_y, obstacle_color
+    global collision_count, game_exited, touch_start_pos, touch_start_time
+    
+    while running:
+        screen.fill(BLACK)
+        
+        # Draw game elements only if not game over
+        if not game_over:
+            draw_grid()
+            draw_block(current_block, current_pos, current_color)
+            
+            # Draw obstacle
+            obstacle_rect = pygame.Rect(obstacle_x * TILE_SIZE, obstacle_y * TILE_SIZE, 
+                                      TILE_SIZE, TILE_SIZE)
+            draw_cube(screen, obstacle_color, obstacle_rect)
+            
+            # Display stats
+            elapsed_time = pygame.time.get_ticks() - timer_start if timer_running else elapsed_time
+            time_left = max(0, (game_duration - elapsed_time) // 1000)
+            font = pygame.font.SysFont(None, 36)
+            time_text = font.render(f"Time: {time_left}s", True, WHITE)
+            lives_text = font.render(f"Lives: {lives}", True, WHITE)
+            score_text = font.render(f"Score: {score}", True, WHITE)
+            screen.blit(time_text, (10, 10))
+            screen.blit(lives_text, (10, 50))
+            screen.blit(score_text, (10, 90))
+
+        # Draw control buttons
+        close_button.draw(screen)
+        pause_button.draw(screen)
+        restart_button.draw(screen)
+
+        if game_over:
+            game_over_reason = ""
+            if game_exited:
+                game_over_reason = "Thanks for playing!"
+            elif lives <= 0:
+                game_over_reason = "Out of lives!"
+            elif elapsed_time >= game_duration:
+                game_over_reason = "Time's up!"
+            else:
+                game_over_reason = "Block collision!"
+                
+            restart_rect = display_game_over(screen, score, game_over_reason)
+            
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                
+                # Handle button clicks in game over screen
+                if close_button.handle_event(event):
+                    running = False
+                    
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if restart_rect.collidepoint(event.pos):
+                        reset_game()
+                        game_over = False
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_RETURN:  # Allow Enter key to restart
+                        reset_game()
+                        game_over = False
+            
+            pygame.display.flip()
+            clock.tick(60)
+            await asyncio.sleep(0)  # Yield control to browser
+            continue
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            
+            # Handle button clicks
+            if close_button.handle_event(event):
+                game_over = True
+                game_exited = True
+            elif pause_button.handle_event(event):
+                timer_running = not timer_running
+            elif restart_button.handle_event(event):
+                reset_game()
+
+            # Touch controls for mobile
+            elif event.type == pygame.MOUSEBUTTONDOWN and not game_over and timer_running:
+                # Check if touch is not on control buttons
+                if not (close_button.rect.collidepoint(event.pos) or 
+                       pause_button.rect.collidepoint(event.pos) or 
+                       restart_button.rect.collidepoint(event.pos)):
+                    touch_start_pos = event.pos
+                    touch_start_time = pygame.time.get_ticks()
+            
+            elif event.type == pygame.MOUSEBUTTONUP and not game_over and timer_running:
+                if touch_start_pos is not None:
+                    touch_end_pos = event.pos
+                    touch_duration = pygame.time.get_ticks() - touch_start_time
+                    
+                    dx = touch_end_pos[0] - touch_start_pos[0]
+                    dy = touch_end_pos[1] - touch_start_pos[1]
+                    distance = (dx**2 + dy**2)**0.5
+                    
+                    # Detect tap (short duration, small movement) - rotate
+                    if touch_duration < TAP_MAX_DURATION and distance < MIN_SWIPE_DISTANCE:
+                        rotated_block = list(zip(*current_block[::-1]))
+                        if not check_collision(rotated_block, current_pos):
+                            current_block = rotated_block
+                    
+                    # Detect swipe gestures
+                    elif distance >= MIN_SWIPE_DISTANCE:
+                        # Horizontal swipe is stronger
+                        if abs(dx) > abs(dy):
+                            if dx > 0:  # Swipe right
+                                new_pos = [current_pos[0] + 1, current_pos[1]]
+                                if not check_collision(current_block, new_pos):
+                                    current_pos = new_pos
+                            else:  # Swipe left
+                                new_pos = [current_pos[0] - 1, current_pos[1]]
+                                if not check_collision(current_block, new_pos):
+                                    current_pos = new_pos
+                        # Vertical swipe (down only)
+                        else:
+                            if dy > 0:  # Swipe down
+                                new_pos = [current_pos[0], current_pos[1] + 1]
+                                if not check_collision(current_block, new_pos):
+                                    current_pos = new_pos
+                    
+                    touch_start_pos = None
+            
+            # Keyboard controls (still available)
+            elif event.type == pygame.KEYDOWN and not game_over and timer_running:
+                if event.key == pygame.K_LEFT:
+                    new_pos = [current_pos[0] - 1, current_pos[1]]
+                    if not check_collision(current_block, new_pos):
+                        current_pos = new_pos
+                elif event.key == pygame.K_RIGHT:
+                    new_pos = [current_pos[0] + 1, current_pos[1]]
+                    if not check_collision(current_block, new_pos):
+                        current_pos = new_pos
+                elif event.key == pygame.K_DOWN:
+                    new_pos = [current_pos[0], current_pos[1] + 1]
+                    if not check_collision(current_block, new_pos):
+                        current_pos = new_pos
+                elif event.key == pygame.K_UP:
+                    rotated_block = list(zip(*current_block[::-1]))
+                    if not check_collision(rotated_block, current_pos):
+                        current_block = rotated_block
+
+        if timer_running and not game_over:
+            # Check for obstacle collision during movement
+            if check_obstacle_collision(current_block, current_pos, obstacle_x, obstacle_y):
+                lives -= 1
+                collision_count += 1
+                
+                # Generate new block and obstacle
+                current_block, current_color, current_pos = generate_new_block()
+                
+                # Only generate new obstacle if there are free spaces
+                new_obstacle = generate_obstacle()
+                if new_obstacle[0] is not None:  # If a valid position was found
+                    obstacle_x, obstacle_y, obstacle_color = new_obstacle
+                
+                if lives <= 0:
+                    game_over = True
+                    display_game_over(screen, score, "Out of lives!")
+
+            # Handle block falling
+            if pygame.time.get_ticks() - last_fall_time > fall_speed:
+                last_fall_time = pygame.time.get_ticks()
+                new_pos = [current_pos[0], current_pos[1] + 1]
+
+                if not check_collision(current_block, new_pos):
+                    current_pos = new_pos
+                else:
+                    lock_block(current_block, current_pos, current_color)
+                    score += 10
+                    clear_rows()
+                    current_block = random.choice(SHAPES)
+                    current_color = random.choice(COLORS)
+                    current_pos = [GRID_WIDTH // 2 - len(current_block[0]) // 2, 0]
+                    
+                    if check_collision(current_block, current_pos):
+                        game_over = True
+                        display_game_over(screen, score, "Block collision!")
+                    
+                    # Generate new obstacle only in free space
+                    new_obstacle = generate_obstacle()
+                    if new_obstacle[0] is not None:  # If a valid position was found
+                        obstacle_x, obstacle_y, obstacle_color = new_obstacle
+
+            # Check if time is over
+            if elapsed_time >= game_duration:
+                game_over = True
+                display_game_over(screen, score, "Time's up!")           
+
+        pygame.display.flip()
+        clock.tick(60)
+        await asyncio.sleep(0)  # Yield control to browser
+
+    pygame.quit()
 
 def display_game_over(screen, score, reason):
     """Display game over screen with score, reason, and restart button"""
@@ -370,139 +581,5 @@ def display_game_over(screen, score, reason):
     pygame.display.flip()
     return restart_rect
 
-# Main game loop modification
-running = True
-while running:
-    screen.fill(BLACK)
-    
-    # Draw game elements only if not game over
-    if not game_over:
-        draw_grid()
-        draw_block(current_block, current_pos, current_color)
-        
-        # Draw obstacle
-        obstacle_rect = pygame.Rect(obstacle_x * TILE_SIZE, obstacle_y * TILE_SIZE, 
-                                  TILE_SIZE, TILE_SIZE)
-        draw_cube(screen, obstacle_color, obstacle_rect)
-        
-        # Display stats
-        elapsed_time = pygame.time.get_ticks() - timer_start if timer_running else elapsed_time
-        time_left = max(0, (game_duration - elapsed_time) // 1000)
-        font = pygame.font.SysFont(None, 36)
-        time_text = font.render(f"Time: {time_left}s", True, WHITE)
-        lives_text = font.render(f"Lives: {lives}", True, WHITE)
-        score_text = font.render(f"Score: {score}", True, WHITE)
-        screen.blit(time_text, (10, 10))
-        screen.blit(lives_text, (10, 50))
-        screen.blit(score_text, (10, 90))
-
-    # Draw control buttons
-    close_button.draw(screen)
-    pause_button.draw(screen)
-    restart_button.draw(screen)
-
-    if game_over:
-        game_over_reason = ""
-        if lives <= 0:
-            game_over_reason = "Out of lives!"
-        elif elapsed_time >= game_duration:
-            game_over_reason = "Time's up!"
-        else:
-            game_over_reason = "Block collision!"
-            
-        restart_rect = display_game_over(screen, score, game_over_reason)
-        
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                if restart_rect.collidepoint(event.pos):
-                    reset_game()
-                    game_over = False
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_RETURN:  # Allow Enter key to restart
-                    reset_game()
-                    game_over = False
-        continue
-
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-        
-        # Handle button clicks
-        if close_button.handle_event(event):
-            running = False
-        elif pause_button.handle_event(event):
-            timer_running = not timer_running
-        elif restart_button.handle_event(event):
-            reset_game()
-
-        elif event.type == pygame.KEYDOWN and not game_over and timer_running:
-            if event.key == pygame.K_LEFT:
-                new_pos = [current_pos[0] - 1, current_pos[1]]
-                if not check_collision(current_block, new_pos):
-                    current_pos = new_pos
-            elif event.key == pygame.K_RIGHT:
-                new_pos = [current_pos[0] + 1, current_pos[1]]
-                if not check_collision(current_block, new_pos):
-                    current_pos = new_pos
-            elif event.key == pygame.K_DOWN:
-                new_pos = [current_pos[0], current_pos[1] + 1]
-                if not check_collision(current_block, new_pos):
-                    current_pos = new_pos
-            elif event.key == pygame.K_UP:
-                rotated_block = list(zip(*current_block[::-1]))
-                if not check_collision(rotated_block, current_pos):
-                    current_block = rotated_block
-
-    if timer_running and not game_over:
-        # Check for obstacle collision during movement
-        if check_obstacle_collision(current_block, current_pos, obstacle_x, obstacle_y):
-            lives -= 1
-            collision_count += 1
-            
-            # Generate new block and obstacle
-            current_block, current_color, current_pos = generate_new_block()
-            
-            # Only generate new obstacle if there are free spaces
-            new_obstacle = generate_obstacle()
-            if new_obstacle[0] is not None:  # If a valid position was found
-                obstacle_x, obstacle_y, obstacle_color = new_obstacle
-            
-            if lives <= 0:
-                game_over = True
-                display_game_over(screen, score, "Out of lives!")
-
-        # Handle block falling
-        if pygame.time.get_ticks() - last_fall_time > fall_speed:
-            last_fall_time = pygame.time.get_ticks()
-            new_pos = [current_pos[0], current_pos[1] + 1]
-
-            if not check_collision(current_block, new_pos):
-                current_pos = new_pos
-            else:
-                lock_block(current_block, current_pos, current_color)
-                score += 10
-                clear_rows()
-                current_block = random.choice(SHAPES)
-                current_color = random.choice(COLORS)
-                current_pos = [GRID_WIDTH // 2 - len(current_block[0]) // 2, 0]
-                
-                if check_collision(current_block, current_pos):
-                    game_over = True
-                    display_game_over(screen, score, "Block collision!")
-                
-                # Generate new obstacle only in free space
-                new_obstacle = generate_obstacle()
-                if new_obstacle[0] is not None:  # If a valid position was found
-                    obstacle_x, obstacle_y, obstacle_color = new_obstacle
-
-        # Check if time is over
-        if elapsed_time >= game_duration:
-            game_over = True
-            display_game_over(screen, score, "Time's up!")           
-
-    pygame.display.flip()
-    clock.tick(60)
-
-pygame.quit()
+# Run the async main function
+asyncio.run(main())
